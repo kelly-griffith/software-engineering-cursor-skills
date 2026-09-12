@@ -26,9 +26,13 @@ launching anything:
 
 1. Resolve both directories to absolute paths; create them if absent. They must be
    distinct. If the frontend directory already contains an app, stop and ask.
-2. Save the **canonical spec** to `{BACKEND}/openapi/openapi.yaml` (download or write it
-   if given as URL/paste; copy if given as a path). Every phase references this file by
-   path; `{SPEC}` means this file from here on.
+2. Resolve the **canonical spec** to an absolute path **outside both** project
+   directories; `{SPEC}` means that path from here on, and every phase references it by
+   path. Given a file path, use it in place. Given a URL or pasted text, write it to a
+   temp file outside both directories; delete that file when the pipeline succeeds, keep
+   it while blocked or failed so resume can reuse it. Never save a spec copy into
+   `{BACKEND}` — a residual copy there becomes a stale second source of truth, and the
+   running service can always regenerate its document at `/v3/api-docs.yaml`.
 3. Fail fast on a broken spec: `npx @redocly/cli@latest lint {SPEC}`. Hard errors go
    back to the user before any subagent is spent; style warnings are fine.
 4. Toolchain: confirm a current-LTS JDK (`java -version`) and Node (`node -v`); check
@@ -96,7 +100,8 @@ Gates are recomputable from disk, so a fresh session never redoes finished work:
 gates in order (scaffold files present and suite red → phase 1 done; `./mvnw test` green
 → phase 2 done; `{FRONTEND}/openapi/openapi.yaml` present with green suite → phase 3
 done; frontend builds and Playwright passes → phase 4 done) and start at the first
-phase whose gate fails.
+phase whose gate fails. Re-resolve `{SPEC}` the same way preflight did (the user's file,
+or the kept temp copy); there is no spec copy in `{BACKEND}` to fall back on.
 
 ## Phase prompts
 
@@ -120,7 +125,8 @@ report:
 
 ```
 Read {SKILLS_DIR}/openapi-to-spring-api/SKILL.md and follow its workflow end to end.
-Spec: {SPEC} (already saved and lint-clean). Project directory: {BACKEND}.
+Spec: {SPEC} (lint-clean; read it in place — do not copy it into the project).
+Project directory: {BACKEND}.
 Toolchain already confirmed: <JDK/Node versions from preflight>.
 Done when its checklist is complete: scaffold written, generated document verified
 against the spec per its step 8 with throwaway stubs deleted, suite compiling with
@@ -151,9 +157,11 @@ unchanged; no assertion edits).
    database) and poll until it answers.
 2. Fetch the runtime document as YAML — default http://localhost:8080/v3/api-docs.yaml,
    unless springdoc.api-docs.path in the config moved it.
-3. Write a small script at {BACKEND}/scripts/ that parses both documents and compares
-   them semantically — paths, operations, parameters and their facets, request/response
-   schemas, required arrays, enums, status codes, media types, response headers.
+3. Write a small script at {BACKEND}/scripts/ that takes two document paths as
+   arguments (source spec, runtime document — no spec file lives in {BACKEND}), parses
+   both, and compares them semantically — paths, operations, parameters and their
+   facets, request/response schemas, required arrays, enums, status codes, media types,
+   response headers.
    Normalize before comparing: resolve each document's effective base path (servers URL
    path + path keys) so a prefix carried in servers on one side and in path keys on the
    other does not read as a wholesale mismatch; ignore server host/port and key order;
@@ -168,7 +176,8 @@ unchanged; no assertion edits).
    fix: ./mvnw test must be green; then re-fetch and re-diff.
 5. When the diff is clean modulo accepted gaps, write the fetched document byte-for-byte
    to {FRONTEND}/openapi/openapi.yaml (create the directory), stop the server, and keep
-   the comparison script in {BACKEND}/scripts/ so it can serve as a CI drift gate.
+   the comparison script in {BACKEND}/scripts/ so it can serve as a CI drift gate —
+   CI supplies the two paths (its source of truth, a freshly fetched runtime document).
 
 Source spec: {SPEC}. Done when: diff clean modulo accepted gaps, suite green, document
 in place. Report each discrepancy found and how it was resolved (one line each).
